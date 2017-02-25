@@ -1,5 +1,6 @@
 #define DEBUG
 #define I2C_TIMEOUT 500
+#define CMD_PARAMS 5
 
 #include <jr.h>
 #include <jrDCC.h>
@@ -39,7 +40,7 @@ int digCount=0;
 int stanCount=0;
 
 int MasterGarbage=0;
-int mili=2000;
+int mili=200;
 int loop_print=0;
 
 
@@ -64,7 +65,10 @@ void setup() {
   jrcmd.add(F("SH")     ,&jr_cmd_sh);
   jrcmd.add(F("MILI")   ,&jr_cmd_mili);
   jrcmd.add(F("LOOP")   ,&jr_cmd_loop);
-  
+  jrcmd.add(F("APIN")   ,jr_cmd_getApin);
+  jrcmd.add(F("ATRE")   ,jr_cmd_Atre);
+  jrcmd.add(F("SETD")    ,jr_cmd_setD);
+  jrcmd.add(F("DEL")    ,jr_cmd_del);
   // put your setup code here, to run once:
   //slave={};
 }
@@ -199,6 +203,90 @@ void delete_arduino(int a) {
 
 //  -------------------- command section -----------------
 
+bool jr_cmd_setD  (ParserParam *p1) {  // send message to i2c slave
+  ParserParam p=*p1;
+  JR_PRINTF("jr_cmd_setD "); 
+  JR_PRINT(CMD_PARAMS);
+  {
+    int sla  =p.i[1];
+    int spi  =p.i[2];
+    int port =p.i[3];
+    int val  =p.i[4];
+    
+    
+    if (sla<slaveCount) {
+      JR_VF(sla);
+      Wire.beginTransmission(byte(slave[sla].a.i2c));
+      Wire.write(byte(setD));
+      Wire.write(byte(spi));
+      JR_VF(spi);
+      Wire.write(byte(port));       
+      JR_VF(port);
+      Wire.write(byte(val));       
+      JR_VF(val);
+      Wire.endTransmission();
+    }
+  }
+}
+
+bool jr_cmd_Atre  (ParserParam *p1) {  // send message to i2c slave
+  ParserParam p=*p1;
+  JR_PRINTF("jr_cmd_Atre "); 
+  {
+    int sla  =p.i[1];
+    int pina =p.i[2];
+    int tre  =p.i[3];
+    
+    if (sla<slaveCount) {
+    JR_VF(sla);
+    Wire.beginTransmission(byte(slave[sla].a.i2c));
+      Wire.write(byte(set_Atreshold));
+      Wire.write(byte(pina));       
+      wire_writeword(tre);
+      Wire.endTransmission();
+    }
+   }
+}
+      
+
+bool jr_cmd_getApin  (ParserParam *p1) {  // send message to i2c slave
+  ParserParam p=*p1;
+  JR_PRINTF("jr_cmd_getApin "); 
+  {
+    int sla  =p.i[1];
+    int pina =p.i[2];
+    if (sla<slaveCount) {
+    JR_VF(sla);
+    Wire.beginTransmission(byte(slave[sla].a.i2c));
+      Wire.write(byte(get_Apin));
+      Wire.write(byte(pina));       
+      if (!Wire.endTransmission()) {
+            JR_VF(pina);
+            Wire.requestFrom(slave[sla].a.i2c, 4);
+            if (wait_bytes(4)) {
+              int wire_readword(res);
+              int wire_readword(tre);
+              JR_VF(res);JR_VF(tre);
+              //treshold update to add
+            }
+      }
+    }
+  }
+  JR_LN;  
+}
+
+
+bool jr_cmd_del  (ParserParam *p1) {  // send message to i2c slave
+  ParserParam p=*p1;
+  JR_PRINTF("jr_cmd_del "); 
+  if (p.i[1] && findArduino(p.i[1])) {
+    int del=findArduino(p.i[1])-1;
+    JR_VF(del);
+    delete_arduino(del);
+  }
+  JR_LN;
+}
+
 bool jr_cmd_mili  (ParserParam *p1) {  // send message to i2c slave
   ParserParam p=*p1;
   JR_PRINTF("jr_cmd_mili "); 
@@ -221,6 +309,7 @@ bool jr_cmd_loop  (ParserParam *p1) {  // send message to i2c slave
   }
   JR_LN;
 }
+
 
 bool jr_cmd_sh  (ParserParam *p1) {  // send message to i2c slave
   JR_PRINTLNF("jr_cmd_sh"); 
@@ -330,6 +419,10 @@ void loop_garbage()
 void loop() {
   // put your main code here, to run repeatedly:
 
+  if (msg_received_bufor[0]) {
+    jrcmd.parse(msg_received_bufor,strlen(msg_received_bufor));
+    msg_received_bufor[0]=0;
+  }
   jrcmd.proceed(&Serial);
 
   loop_garbage();
@@ -483,6 +576,7 @@ void loop() {
           } else {
             // end od learning
             learningArduino=255;
+            mili=6000;loop_print=1;
             JR_PRINTF(" END LEARNING");
           }
         }    
@@ -500,9 +594,10 @@ void loop() {
    DynamicArrayHelper dynamicarrayhelper;      
    int tmpCount=0;
    int tmpA=0;
+   
    dynamicarrayhelper.SetArrayLength( (void *&)stanTmp,stanCount,tmpCount,sizeof(byte) );
-  
-    for (int i=0;i<slaveCount;i++) {
+   
+    for (int i=0;i<slaveCount;i++) {      
       // in learning do not get the states
       if (slave[i].a.i2c==learningArduino) continue;        
             Wire.beginTransmission(byte(slave[i].a.i2c));
@@ -513,14 +608,37 @@ void loop() {
               byte newItem;
               if (loop_print) {JR_PRINTDECV(F("bytes"),byte(slave[i].a.bytes));}
               Wire.requestFrom(byte(slave[i].a.i2c), byte(slave[i].a.bytes));
+              int tmpS=tmpA;
               for(int j=0;j<slave[i].a.bytes;j++) {
                 byte b=Wire.read();
                 if (loop_print) {JR_PRINTBINV(j,b);}
                 stanTmp[tmpA++]=b;
               }
+              byte u=slave[i].a.analog+slave[i].a.digital;
+              
+              u=GetBit(stanTmp,u+(tmpS*8));
+              JR_VF(u);
+              if (!msg_received_bufor[0] && u) {
+                  Wire.beginTransmission(byte(slave[i].a.i2c));
+                  Wire.write(msg_to_master);       
+                  if (!Wire.endTransmission()) {
+                    JR_PRINTF (" MSG:");JR_PRINT(slave[i].a.i2c);JR_PRINTF(":");
+                    Wire.requestFrom(byte(slave[i].a.i2c), byte(CMD_BUF));
+                    for (byte u=0;u<CMD_BUF;u++) msg_received_bufor[u]=Wire.read();
+                    msg_received_bufor[CMD_BUF]=0;
+                    JR_PRINT(msg_received_bufor);JR_PRINT (strlen(msg_received_bufor));JR_LN;
+                  }
+                
+              }
+              
             }
         //while (1);
+//        tmpS+=slave[i].a.bytes;
     }
+
+  //check if any message pending 
+  
+    
   dynamicarrayhelper.SetArrayLength( (void *&)stanTmp,0,tmpCount,sizeof(byte) );
  }
 
