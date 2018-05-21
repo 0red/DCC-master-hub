@@ -22,6 +22,12 @@ struct MasterDig {
   DigitalPinU pin;
 };
 
+struct MasterLed {
+  byte ard;
+  LedPinU pin;
+};
+
+
 struct MasterAna {
   byte ard;
   AnalogPinU pin;
@@ -31,12 +37,19 @@ struct MasterAna {
 ArduinoU *slave ;
 MasterAna *ana;
 MasterDig *dig;
+MasterLed *led;
+
+byte systemState[get_byte(TOTAL_LEN)];
+byte signalState[get_byte(SIGNALS_LEN*2)];
+
+
 byte *stan;
 byte *stanTmp;
 
 int slaveCount=0;
 int anaCount=0;
 int digCount=0;
+int ledCount=0;
 int stanCount=0;
 
 int MasterGarbage=0;
@@ -73,6 +86,30 @@ void setup() {
   //slave={};
 }
 
+
+//  -------------------- show led table-----------------
+void showLedPin(MasterLed a) {
+    JR_PRINTDECV("ard",a.ard);
+
+    JR_PRINT(a.pin.a.name);JR_PRINTF(" ");
+    
+    JR_PRINTDECV("port",a.pin.a.port);
+    JR_PRINTDECV("dcc",a.pin.a.dcc);
+    JR_PRINTDECV("type",a.pin.a.signal_type);
+    JR_PRINTDECV("s",sizeof(MasterLed));
+    JR_LN;
+  
+}
+
+void showLedPin() {
+  //DEBUG_PRINT(anaCount);
+  JR_POINTER(led);JR_PRINTV(" led",ledCount);JR_LN;
+  
+  for (byte i=0;i<ledCount;i++) {
+    JR_VD(i);
+    showLedPin(led[i]);
+  }
+}
 
 //  -------------------- show analog table-----------------
 void showAnalogPin(MasterAna a) {
@@ -136,6 +173,7 @@ void showArduino(ArduinoU a) {
     JR_PRINTDECV("i2c",a.a.i2c);
     JR_PRINTDECV("dig",a.a.digital);
     JR_PRINTDECV("ana",a.a.analog);
+    JR_PRINTDECV("led",a.a.led);
     JR_PRINTDECV("byt",a.a.bytes);
     JR_PRINTDECV("board",a.a.board);
     JR_PRINTDECV("ts",a.a.ts);
@@ -189,15 +227,20 @@ void delete_arduino(int a) {
         // delete all pins from that board
         //renumber
         for (int i=0; i<digCount;i++) {
-          if (dig[i].ard==a) dig[i].ard=255;else
+          if (dig[i].ard==a)  dig[i].ard=255;else
           if (dig[i].ard> a)  dig[i].ard--;
         };
         JR_PRINTF(" DIG-");
         for (int i=0; i<anaCount;i++) {
-          if (ana[i].ard==a) ana[i].ard=255; else
+          if (ana[i].ard==a)  ana[i].ard=255; else
           if (ana[i].ard> a)  ana[i].ard--;
         };
         JR_PRINTF(" ANA-");
+        for (int i=0; i<ledCount;i++) {
+          if (led[i].ard==a)  led[i].ard=255; else
+          if (led[i].ard> a)  led[i].ard--;
+        };
+        JR_PRINTF(" LED-");
     //JR_LN;
 }
 
@@ -409,15 +452,31 @@ void loop_garbage()
         dynamicarrayhelper.RemoveFromArray((void *&)ana,MasterGarbage, anaCount, sizeof(MasterAna));
       }
     }
+    if (MasterGarbage<ledCount) {
+      properNumber=true;
+      if (led[MasterGarbage].ard==255) {
+        JR_PRINTF(" ANA");
+        DynamicArrayHelper dynamicarrayhelper;        
+        dynamicarrayhelper.RemoveFromArray((void *&)led,MasterGarbage, ledCount, sizeof(MasterLed));
+      }
+    }
+    
     if (properNumber) MasterGarbage++; else MasterGarbage=0;
     // --- loop --- check i2c devices -- stop
     if (loop_print) {JR_PRINTF(" :Garbage END");JR_LN;}
   }
 
 
+//  -------------------- main loop i2c handling -----------------
+
+
+
 //  -------------------- main loop -----------------
 void loop() {
   // put your main code here, to run repeatedly:
+
+
+  // check if there is any pending message from arduino's do Master to proceed
 
   if (msg_received_bufor[0]) {
     jrcmd.parse(msg_received_bufor,strlen(msg_received_bufor));
@@ -425,10 +484,15 @@ void loop() {
   }
   jrcmd.proceed(&Serial);
 
+  
+// garbage the memory in case of arduino's lost
   loop_garbage();
 
 
+
+
   // --- loop --- check i2c devices -- start
+  // check if there is any new Arduino avaiable
   {
     //check the next i2c slave address
     //if (lastTested++>127) lastTested=0;
@@ -517,6 +581,13 @@ void loop() {
     if (loop_print) {JR_PRINTF(" :I2C");JR_LN;}
   }
     // --- loop --- check i2c devices -- end
+
+
+    // -- learning Arduino  start
+    //      - learn digital ports
+    //      - learn analog  ports
+    //      - start getting states
+    
  {  //
     if (learningArduino<127) {
       DynamicArrayHelper dynamicarrayhelper;
@@ -525,13 +596,14 @@ void loop() {
       if (byte ard=findArduino(learningArduino)) {
         ard--;
         if (learningPin==0) {
+          // reset counter on the learning slave
           Wire.beginTransmission(byte(slave[ard].a.i2c));
           Wire.write(byte(reset_pin_info));
           Wire.endTransmission();
           JR_PRINTF(" RESET");
         }
         if (learningPin<slave[ard].a.digital) {
-          // digital to read
+          // next digital to read
           JR_PRINTF(" DIG");
           Wire.beginTransmission(byte(slave[ard].a.i2c));
           Wire.write(get_pin_info);       
@@ -553,7 +625,7 @@ void loop() {
           }
         } else {
           if (learningPin<slave[ard].a.digital+slave[ard].a.analog) {
-            // digital to read
+            // next analog to read
             JR_PRINTF(" ANA");
             Wire.beginTransmission(byte(slave[ard].a.i2c));
             Wire.write(get_pin_info);       
@@ -574,10 +646,33 @@ void loop() {
               }
             }
           } else {
-            // end od learning
+            if (learningPin<slave[ard].a.digital+slave[ard].a.analog+slave[ard].a.led) {
+              // next analog to read
+              JR_PRINTF(" LED");
+              Wire.beginTransmission(byte(slave[ard].a.i2c));
+              Wire.write(get_pin_info);       
+              if (!Wire.endTransmission()) {
+                MasterLed newItem;
+                newItem.ard=ard;
+                JR_PRINTBINV(F(" get"),sizeof(LedPinU));
+                Wire.requestFrom(learningArduino, sizeof(LedPinU));
+                learningPin++;
+                if (wait_bytes(sizeof(LedPinU))) {
+                  for (byte i=0;i<sizeof(LedPinU);i++) {
+                   byte b1=Wire.read();
+                   newItem.pin.b[i]=b1;
+                  }
+                  showLedPin(newItem);   
+                  dynamicarrayhelper.AddToArray( (void *&)led,&newItem,ledCount,(byte) sizeof(MasterLed));
+                  JR_PRINTF(" ADDED");
+                }
+              }  
+            } else {
+            // end od learning --> so start getting states
             learningArduino=255;
             mili=6000;loop_print=1;
             JR_PRINTF(" END LEARNING");
+            }
           }
         }    
       } else {
@@ -587,10 +682,11 @@ void loop() {
     if (loop_print) {JR_PRINTF(" :LEARN");JR_LN;}
    }
  }
+    // -- learning Arduino  end
 
 
  //if (0)
- { //get states
+ { //get Slave states
    DynamicArrayHelper dynamicarrayhelper;      
    int tmpCount=0;
    int tmpA=0;
@@ -627,8 +723,7 @@ void loop() {
                     for (byte u=0;u<CMD_BUF;u++) msg_received_bufor[u]=Wire.read();
                     msg_received_bufor[CMD_BUF]=0;
                     JR_PRINT(msg_received_bufor);JR_PRINT (strlen(msg_received_bufor));JR_LN;
-                  }
-                
+                  } 
               }
               
             }
@@ -636,8 +731,47 @@ void loop() {
 //        tmpS+=slave[i].a.bytes;
     }
 
-  //check if any message pending 
-  
+  //check if any state change
+  tmpCount=0;
+  for (int i=0;i<slaveCount;i++) {      
+      // in learning do not get the states
+      if (slave[i].a.i2c==learningArduino) continue;        
+
+      for (int j=0;j<slave[i].a.digital;j++) {
+        byte b=GetBit(stanTmp,tmpCount*8+j);
+        if (b!=GetBit(stan,tmpCount*8+j)) {
+          Serial.println();
+          Serial.print(F("FB "));
+          if (b) { 
+            SetBit(stan,tmpCount*8+j); 
+            Serial.print(F("1 "));
+          } else { 
+            ClearBit(stan,tmpCount*8+j); 
+            Serial.print(F("0 "));
+          }
+          Serial.println(slave[i].a.name);
+        }
+      }
+
+      for (int j=0;j<slave[i].a.analog;j++) {
+        byte d=slave[i].a.digital;
+        byte b=GetBit(stanTmp,tmpCount*8+j+d);
+        if (b!=GetBit(stan,tmpCount*8+j+d)) {
+          Serial.println();
+          Serial.print(F("FB "));
+          if (b) { 
+            SetBit(stan,tmpCount*8+j+d); 
+            Serial.print(F("1 "));
+          } else { 
+            ClearBit(stan,tmpCount*8+j+d); 
+            Serial.print(F("0 "));
+          }
+          Serial.println(slave[i].a.name);
+        }
+      }
+      
+      tmpCount+=slave[i].a.bytes;
+  }  
     
   dynamicarrayhelper.SetArrayLength( (void *&)stanTmp,0,tmpCount,sizeof(byte) );
  }
