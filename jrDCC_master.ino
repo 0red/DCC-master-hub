@@ -135,7 +135,22 @@ void showAnalogPin() {
   }
 }
 
-
+int sendBlockMsg(byte _type, integer _nr, boolean _block) {
+	BlockMsgU msg;  
+	msg.a.block=(_block)?1:0;
+	msg.a.typ=_type;
+	msg.a.nr=_nr;
+	
+	JR_PRINTDECV(F(" block?"),msg.a.block);
+	JR_PRINTDECV(F(" typ"),msg.a.typ);
+	JR_PRINTDECV(F(" nr"),msg.a.nr);
+	
+	Wire.beginTransmission (0);				// broadcast to all
+	Wire.write(byte(block_msg));
+	for (int i=0;i<sizeof(BlockMsg);i++) Wire.write(byte(msg.b[i]));
+	byte err = Wire.endTransmission  ();  	// non-zero means error
+	return err;
+}
 
 //  -------------------- show digital table-----------------
 void showDigitalPin(MasterDig a) {
